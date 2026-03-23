@@ -64,17 +64,26 @@ def parse_ip_csv():
                     continue
                 seen.add(ip)
 
-                raw_score   = row.get("malicious_score", "Not found").strip()
-                total_scans = row.get("total_scans", "0").strip()
+                raw_score   = row.get("malicious_score", "").strip()
+                total_scans = row.get("total_scans", "").strip()
+                tags_val    = row.get("tags", "").strip()
                 link        = row.get("link", "").strip()
 
-                if raw_score.lower() == "not found" or raw_score == "":
+                # Fallback : versions récentes de vt_tools mettent le score dans 'tags'
+                # quand malicious_score vaut "Not found"
+                if raw_score.lower() in ("not found", "") and tags_val.lstrip("-").isdigit():
+                    raw_score = tags_val
+
+                score_is_num   = raw_score.lstrip("-").isdigit()
+                total_is_num   = total_scans.lstrip("-").isdigit()
+
+                if not score_is_num:
                     formatted_score = "Not found"
+                elif total_is_num:
+                    formatted_score = f"{int(raw_score)}/{int(total_scans)}"
                 else:
-                    try:
-                        formatted_score = f"{int(raw_score)}/{int(total_scans)}"
-                    except ValueError:
-                        formatted_score = "Not found"
+                    # total_scans absent — on affiche quand même le score
+                    formatted_score = f"{int(raw_score)}/?"
 
                 iocs.append({
                     "value":           ip,
@@ -143,12 +152,12 @@ def get_score_status(score_str):
     if not score_str or score_str.strip().lower() == "not found":
         return {"malicious": None, "total": None, "status": "UNKNOWN", "badge": "badge-unknown"}
 
-    match = re.match(r"(\d+)/(\d+)", score_str.strip())
+    match = re.match(r"(\d+)/(\d+|\?)", score_str.strip())
     if not match:
         return {"malicious": None, "total": None, "status": "UNKNOWN", "badge": "badge-unknown"}
 
     malicious = int(match.group(1))
-    total     = int(match.group(2))
+    total     = int(match.group(2)) if match.group(2) != "?" else None
 
     if malicious > 5:
         return {"malicious": malicious, "total": total, "status": "MALICIOUS", "badge": "badge-malicious"}
