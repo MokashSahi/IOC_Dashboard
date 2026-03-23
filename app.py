@@ -79,11 +79,12 @@ def parse_ip_csv():
 
                 if not score_is_num:
                     formatted_score = "Not found"
-                elif total_is_num:
+                elif total_is_num and int(total_scans) > 0:
                     formatted_score = f"{int(raw_score)}/{int(total_scans)}"
                 else:
-                    # total_scans absent — on affiche quand même le score
-                    formatted_score = f"{int(raw_score)}/?"
+                    # total_scans absent dans ce format CSV — défaut VT = 94 moteurs
+                    formatted_score = f"{int(raw_score)}/94"
+                
 
                 iocs.append({
                     "value":           ip,
@@ -152,12 +153,12 @@ def get_score_status(score_str):
     if not score_str or score_str.strip().lower() == "not found":
         return {"malicious": None, "total": None, "status": "UNKNOWN", "badge": "badge-unknown"}
 
-    match = re.match(r"(\d+)/(\d+|\?)", score_str.strip())
+    match = re.match(r"(\d+)/(\d+)", score_str.strip())
     if not match:
         return {"malicious": None, "total": None, "status": "UNKNOWN", "badge": "badge-unknown"}
 
     malicious = int(match.group(1))
-    total     = int(match.group(2)) if match.group(2) != "?" else None
+    total     = int(match.group(2))
 
     if malicious > 5:
         return {"malicious": malicious, "total": total, "status": "MALICIOUS", "badge": "badge-malicious"}
