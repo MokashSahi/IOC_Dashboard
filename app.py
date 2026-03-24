@@ -225,7 +225,9 @@ def list_misp_events():
 
 @app.route("/")
 def index():
-    return render_template("index.html")
+    events  = list_misp_events()
+    misp_ok = get_misp() is not None
+    return render_template("index.html", events=events, misp_ok=misp_ok, misp_url=MISPURL)
 
 
 @app.route("/analyze", methods=["POST"])
@@ -243,12 +245,21 @@ def analyze():
     report_path = os.path.join(VT_TOOL_DIR, filename)
     uploaded.save(report_path)
 
+    # Optional VT key & proxy from the form (override env for this run)
+    vt_key_form  = request.form.get("vt_key",  "").strip()
+    proxy_form   = request.form.get("proxy_url", "").strip()
+
     # Lancer vt_tools.py en mode non-interactif
     venv_python = os.path.join(VT_TOOL_DIR, ".venv", "bin", "python")
     if not os.path.exists(venv_python):
         venv_python = "python3"
     vt_script = os.path.join(VT_TOOL_DIR, "vt_tools.py")
     env = os.environ.copy()
+    if vt_key_form:
+        env["VT_API_KEY"] = vt_key_form
+    if proxy_form:
+        env["HTTPS_PROXY"] = proxy_form
+        env["HTTP_PROXY"]  = proxy_form
 
     try:
         subprocess.run(

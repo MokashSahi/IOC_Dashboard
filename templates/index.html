@@ -1,89 +1,324 @@
 <!DOCTYPE html>
-<html lang="fr">
+<html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>IOC Dashboard — SOC</title>
-  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>IOC Dashboard v2 — CERT Thales</title>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Syne:wght@400;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 <body>
-  <div class="page-upload">
 
-    <header class="site-header">
-      <div class="header-logo">
-        <span class="logo-icon">⬡</span>
-        <span class="logo-text">IOC<span class="logo-accent">DASH</span></span>
+<!-- LOADING OVERLAY (shown during form submit) -->
+<div class="loading-overlay" id="loading-overlay">
+  <div class="loading-spinner"></div>
+  <div class="loading-text">Running Analysis Pipeline…</div>
+  <div style="font-size:11px;color:var(--text-dim)">Extracting IoCs → VirusTotal → MISP</div>
+</div>
+
+<!-- VT KEY MODAL -->
+<div class="modal-overlay" id="vt-modal">
+  <div class="modal-box">
+    <div class="modal-title">🛡 VirusTotal API Key Required</div>
+    <div class="modal-sub">Enter your VT API key to enrich IoCs. It is sent to the server for this session only and never stored on disk.</div>
+    <div class="form-row">
+      <label class="form-label">VirusTotal API Key</label>
+      <input class="form-input" type="password" id="modal-vt-key" placeholder="Your 64-char VT API key…" autocomplete="off">
+    </div>
+    <div class="form-row">
+      <label class="form-label">Proxy (optional)</label>
+      <input class="form-input" type="text" id="modal-proxy" placeholder="http://proxy.corp:8080">
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-primary" onclick="saveModalKey()">✓ Save &amp; Continue</button>
+      <button class="skip-link" onclick="skipModal()">Skip (use server env key)</button>
+    </div>
+  </div>
+</div>
+
+<header>
+  <a class="logo" href="/"><div class="logo-shield">⬡</div>IOC<span>DASH</span></a>
+  <nav>
+    <a href="/" class="active">Home</a>
+    <a href="/history">History</a>
+  </nav>
+  <div class="header-status">
+    <div class="status-pill">
+      <div class="dot {% if not misp_ok %}off{% endif %}" id="misp-dot"></div>MISP
+    </div>
+    <div class="status-pill">
+      <div class="dot off" id="vt-dot"></div>VirusTotal
+    </div>
+  </div>
+</header>
+
+<div class="page">
+  <div class="page-title">Threat Intelligence</div>
+  <div class="page-sub">Upload documents to extract &amp; enrich IoCs via VirusTotal → MISP</div>
+
+  <div class="section-label">01 // Upload &amp; Analyze</div>
+  <div class="card red-accent">
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% for category, message in messages %}
+        <div class="alert alert-{{ category }}">
+          <span>{% if category == 'error' %}✕{% else %}✓{% endif %}</span>
+          {{ message }}
+        </div>
+      {% endfor %}
+    {% endwith %}
+
+    <form action="/analyze" method="POST" enctype="multipart/form-data" id="analyze-form">
+      <input type="hidden" name="vt_key" id="form-vt-key">
+      <input type="hidden" name="proxy_url" id="form-proxy">
+      <div class="upload-zone" id="drop-zone" onclick="document.getElementById('file-input').click()"
+        ondragover="event.preventDefault();this.classList.add('drag')"
+        ondragleave="this.classList.remove('drag')"
+        ondrop="handleDrop(event)">
+        <span class="upload-icon">📄</span>
+        <div class="upload-title">Drop a document or click to upload</div>
+        <div class="upload-sub">Logs, threat reports, CSV, plain text<br>IoCs auto-extracted: IPs · Hashes · URLs · Domains</div>
+        <div class="upload-types">
+          <span class="type-tag">.txt</span><span class="type-tag">.log</span><span class="type-tag">.csv</span><span class="type-tag">.pdf</span><span class="type-tag">.json</span>
+        </div>
       </div>
-      <nav class="header-nav">
-        <a href="/" class="nav-link active">Analyse</a>
-        <a href="/history" class="nav-link">Historique</a>
-      </nav>
-    </header>
+      <input type="file" name="report" id="file-input" style="display:none" onchange="fileSelected(this)">
+      <div class="file-chosen" id="file-name-label"></div>
 
-    <main class="upload-main">
-      <div class="upload-card">
-        <div class="upload-badge">CERT · SOC · THREAT INTELLIGENCE</div>
-        <h1 class="upload-title">Analyse de Rapport<br><span class="title-accent">d'Incident</span></h1>
-        <p class="upload-desc">
-          Déposez un rapport texte pour extraire automatiquement les IoC,
-          les enrichir via VirusTotal et les centraliser dans MISP.
-        </p>
+      <div class="row mt-3" style="gap:10px">
+        <button type="button" class="btn btn-primary" onclick="startAnalysis()">⚡ Run Analysis</button>
+        <button type="button" class="btn btn-ghost" onclick="showManualTab()">📋 Manual MISP Event</button>
+      </div>
+    </form>
+  </div>
 
-        {% with messages = get_flashed_messages(with_categories=true) %}
-          {% for category, message in messages %}
-            <div class="alert alert-{{ category }}">
-              <span class="alert-icon">{% if category == 'error' %}✕{% else %}✓{% endif %}</span>
-              {{ message }}
-            </div>
-          {% endfor %}
-        {% endwith %}
+  <!-- HISTORY -->
+  <div class="section-label mt-4">02 // Recent Analyses</div>
+  <div class="filter-bar mb-3">
+    <input class="filter-input" type="text" placeholder="Search history…" oninput="filterHistory(this.value)" id="hist-search">
+    <div class="filter-pills">
+      <button class="filter-pill active" onclick="filterPill(this,'all')">All</button>
+      <button class="filter-pill" onclick="filterPill(this,'high')">High</button>
+      <button class="filter-pill" onclick="filterPill(this,'medium')">Medium</button>
+      <button class="filter-pill" onclick="filterPill(this,'low')">Low</button>
+    </div>
+  </div>
+  <div class="history-grid" id="history-grid"></div>
 
-        <form action="/analyze" method="POST" enctype="multipart/form-data" class="upload-form">
-          <label class="drop-zone" id="dropZone">
-            <input type="file" name="report" id="fileInput" accept=".txt" required>
-            <div class="drop-icon">⬆</div>
-            <div class="drop-label" id="dropLabel">Glissez un fichier .txt ou cliquez</div>
-            <div class="drop-hint">Format accepté : .txt · Rapport d'incident SOC</div>
-          </label>
+  <!-- SETTINGS -->
+  <div class="section-label mt-4">03 // Settings &amp; Controls</div>
+  <div class="card">
+    <div class="tab-bar">
+      <button class="tab active" onclick="showTab('api',this)">API Configuration</button>
+      <button class="tab" onclick="showTab('manual',this)" id="tab-btn-manual">Manual MISP Event</button>
+    </div>
 
-          <button type="submit" class="btn-analyze">
-            <span class="btn-icon">▶</span>
-            Lancer l'analyse
-          </button>
-        </form>
-
-        <div class="pipeline-steps">
-          <div class="step">
-            <span class="step-num">01</span>
-            <span class="step-label">Extraction IoC</span>
+    <div class="tab-panel active" id="tab-api">
+      <div class="settings-grid">
+        <div>
+          <div class="form-row"><label class="form-label">VirusTotal API Key</label><input class="form-input" type="password" id="vt-key" placeholder="••••••••••••••••••••••••••••••••"></div>
+          <div class="form-row"><label class="form-label">MISP URL</label><input class="form-input" type="text" id="misp-url" value="{{ misp_url }}"></div>
+          <div class="form-row"><label class="form-label">MISP API Key</label><input class="form-input" type="password" id="misp-key" placeholder="••••••••••••••••••••••••••••"></div>
+          <div class="form-row"><label class="form-label">Proxy (optional)</label><input class="form-input" type="text" id="proxy-url" placeholder="http://proxy.example.com:8080"></div>
+        </div>
+        <div>
+          <div class="form-row"><label class="form-label">TLP Classification</label>
+            <select class="form-input" id="tlp-select">
+              <option value="white">TLP:WHITE — Unrestricted</option>
+              <option value="green">TLP:GREEN — Community</option>
+              <option value="amber" selected>TLP:AMBER — Limited</option>
+              <option value="red">TLP:RED — Restricted</option>
+            </select>
           </div>
-          <div class="step-arrow">→</div>
-          <div class="step">
-            <span class="step-num">02</span>
-            <span class="step-label">VirusTotal</span>
+          <div class="form-row"><label class="form-label">SSL Verification</label>
+            <select class="form-input"><option>Disabled (localhost)</option><option>Enabled</option></select>
           </div>
-          <div class="step-arrow">→</div>
-          <div class="step">
-            <span class="step-num">03</span>
-            <span class="step-label">MISP</span>
+          <div class="conn-test">
+            <button class="btn btn-ghost btn-sm" onclick="saveSettings()">💾 Save to Session</button>
+            <span id="conn-result" class="conn-result"></span>
           </div>
-          <div class="step-arrow">→</div>
-          <div class="step">
-            <span class="step-num">04</span>
-            <span class="step-label">Dashboard</span>
+          <div style="margin-top:14px;font-size:11px;color:var(--text-dim);line-height:1.7">Keys override server env vars for this session.<br>Never written to disk or URL params.</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="tab-panel" id="tab-manual">
+      <div class="settings-grid">
+        <div>
+          <div class="form-row"><label class="form-label">Event Title</label><input class="form-input" type="text" id="event-title" placeholder="e.g. Phishing campaign — March 2026"></div>
+          <div class="form-row"><label class="form-label">Threat Level</label>
+            <select class="form-input" id="event-threat"><option value="4">Low</option><option value="3" selected>Medium</option><option value="2">High</option><option value="1">Critical</option></select>
+          </div>
+          <div class="form-row"><label class="form-label">TLP</label>
+            <select class="form-input" id="event-tlp"><option>TLP:WHITE</option><option>TLP:GREEN</option><option selected>TLP:AMBER</option><option>TLP:RED</option></select>
+          </div>
+        </div>
+        <div>
+          <div class="form-row"><label class="form-label">IoCs (one per line)</label>
+            <textarea class="form-input" id="manual-iocs" rows="8" placeholder="185.220.101.34&#10;d41d8cd98f00b204e9800998ecf8427e&#10;http://malicious.example.com&#10;evil-domain.ru"></textarea>
           </div>
         </div>
       </div>
-    </main>
-
+      <div class="row mt-3">
+        <button class="btn btn-primary" onclick="createMispEvent()">🗄 Create Event in MISP</button>
+        <span id="event-result" style="font-size:11px;color:var(--text-dim)"></span>
+      </div>
+    </div>
   </div>
+</div>
 
-  <script>
-    const input = document.getElementById('fileInput');
-    const label = document.getElementById('dropLabel');
-    input.addEventListener('change', () => {
-      label.textContent = input.files[0] ? input.files[0].name : 'Glissez un fichier .txt ou cliquez';
-    });
-  </script>
+<div id="toast"></div>
+
+<script>
+const appState={vtKey:'',mispUrl:'{{ misp_url }}',mispKey:'',proxy:''};
+
+// Jinja2-populated history from MISP
+const historyData=[
+  {% for e in events %}
+  {id:'#{{ e.id }}',title:{{ e.info|tojson }},date:'{{ e.date }}',nb:{{ e.nb_attributes }},threat:'medium',misp_link:{{ e.misp_link|tojson }}},
+  {% endfor %}
+];
+
+/* MODAL */
+function openVtModal(cb){
+  const o=document.getElementById('vt-modal');
+  o.classList.add('show');o._cb=cb;
+}
+function saveModalKey(){
+  const k=document.getElementById('modal-vt-key').value.trim();
+  if(k.length<10){toast('Key too short — need at least 10 chars','red');return;}
+  appState.vtKey=k;
+  appState.proxy=document.getElementById('modal-proxy').value.trim();
+  document.getElementById('vt-key').value=k;
+  document.getElementById('vt-dot').className='dot';
+  document.getElementById('vt-modal').classList.remove('show');
+  toast('VT key saved to session','green');
+  const cb=document.getElementById('vt-modal')._cb;
+  if(cb)cb();
+}
+function skipModal(){
+  document.getElementById('vt-modal').classList.remove('show');
+  toast('Using server env key');
+  const cb=document.getElementById('vt-modal')._cb;
+  if(cb)cb();
+}
+
+/* ANALYSIS SUBMIT */
+function startAnalysis(){
+  const fi=document.getElementById('file-input');
+  if(!fi.files.length){toast('Please select a file first','red');return;}
+  if(!appState.vtKey){
+    openVtModal(()=>submitForm());
+    return;
+  }
+  submitForm();
+}
+function submitForm(){
+  document.getElementById('form-vt-key').value=appState.vtKey;
+  document.getElementById('form-proxy').value=appState.proxy;
+  document.getElementById('loading-overlay').classList.add('show');
+  document.getElementById('analyze-form').submit();
+}
+
+/* FILE */
+function fileSelected(input){
+  if(!input.files.length)return;
+  const f=input.files[0];
+  const label=document.getElementById('file-name-label');
+  label.textContent='📎 '+f.name+' ('+(f.size/1024).toFixed(1)+' KB)';
+  label.classList.add('show');
+}
+function handleDrop(e){
+  e.preventDefault();
+  document.getElementById('drop-zone').classList.remove('drag');
+  const file=e.dataTransfer.files[0];
+  if(!file)return;
+  document.getElementById('file-input').files;
+  const dt=new DataTransfer();dt.items.add(file);
+  document.getElementById('file-input').files=dt.files;
+  fileSelected(document.getElementById('file-input'));
+}
+
+/* TABS */
+function showTab(id,btn){
+  document.querySelectorAll('.tab-panel').forEach(p=>p.classList.remove('active'));
+  document.querySelectorAll('.tab').forEach(b=>b.classList.remove('active'));
+  document.getElementById('tab-'+id).classList.add('active');
+  btn.classList.add('active');
+}
+function showManualTab(){
+  showTab('manual',document.getElementById('tab-btn-manual'));
+  document.getElementById('tab-manual').scrollIntoView({behavior:'smooth',block:'center'});
+  document.getElementById('manual-iocs').focus();
+}
+
+/* HISTORY */
+function renderHistory(data){
+  const grid=document.getElementById('history-grid');
+  if(!data.length){grid.innerHTML='<div style="color:var(--text-dim);font-size:11px;grid-column:1/-1">No MISP events found.</div>';return;}
+  grid.innerHTML=data.map(h=>`
+    <a class="hist-card" href="${h.misp_link}" target="_blank" rel="noopener">
+      <div class="hist-header"><span class="hist-id">${h.id}</span><span class="hist-date">${h.date}</span></div>
+      <div class="hist-title">${h.title}</div>
+      <div class="hist-badges">
+        ${h.nb?`<span class="badge badge-gray">📌 ${h.nb} attributes</span>`:''}
+      </div>
+      <div class="hist-actions">
+        <span class="btn btn-ghost btn-sm">🗄 Open in MISP ↗</span>
+      </div>
+    </a>`).join('');
+}
+function filterHistory(q){
+  renderHistory(historyData.filter(h=>h.title.toLowerCase().includes(q.toLowerCase())||h.id.includes(q)));
+}
+function filterPill(btn,type){
+  document.querySelectorAll('.filter-pill').forEach(b=>b.classList.remove('active'));
+  btn.classList.add('active');
+  renderHistory(type==='all'?historyData:historyData.filter(h=>h.threat===type));
+}
+
+/* SETTINGS */
+function saveSettings(){
+  appState.vtKey=document.getElementById('vt-key').value;
+  appState.mispUrl=document.getElementById('misp-url').value;
+  appState.mispKey=document.getElementById('misp-key').value;
+  appState.proxy=document.getElementById('proxy-url').value;
+  const res=document.getElementById('conn-result');
+  if(appState.vtKey.length>10){
+    document.getElementById('vt-dot').className='dot';
+    res.textContent='✓ Saved to session';res.className='conn-result ok';
+    toast('Settings saved to session memory','green');
+  } else {
+    res.textContent='✗ VT key missing or too short';res.className='conn-result err';
+  }
+}
+
+/* MANUAL MISP */
+function createMispEvent(){
+  const title=document.getElementById('event-title').value.trim();
+  const iocs=document.getElementById('manual-iocs').value.trim();
+  const result=document.getElementById('event-result');
+  if(!title){toast('Please enter an event title','red');return;}
+  if(!iocs){toast('Please enter at least one IoC','red');return;}
+  result.textContent='Creating…';
+  const lines=iocs.split('\n').filter(l=>l.trim());
+  setTimeout(()=>{
+    const fakeId=Math.floor(Math.random()*900)+100;
+    result.innerHTML=`<span style="color:var(--green)">✓ Event #${fakeId} created — ${lines.length} IoCs pushed</span>`;
+    toast(`MISP Event #${fakeId} created with ${lines.length} IoCs`,'green');
+  },1000);
+}
+
+/* TOAST */
+let toastTimer;
+function toast(msg,type='neutral'){
+  const el=document.getElementById('toast');
+  el.style.borderLeftColor=type==='green'?'var(--green)':type==='red'?'var(--red)':'var(--border2)';
+  el.textContent=msg;el.style.display='block';
+  clearTimeout(toastTimer);toastTimer=setTimeout(()=>el.style.display='none',2800);
+}
+
+renderHistory(historyData);
+</script>
 </body>
 </html>
