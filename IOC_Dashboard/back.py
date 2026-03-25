@@ -9,6 +9,7 @@ import re
 import csv
 import glob
 import subprocess
+from dotenv import load_dotenv
 from flask import Flask, request, render_template, redirect, url_for, flash
 from pymisp import PyMISP, MISPEvent, MISPAttribute
 
@@ -16,13 +17,15 @@ from pymisp import PyMISP, MISPEvent, MISPAttribute
 # BLOC A — Configuration & connexion MISP
 # ─────────────────────────────────────────────
 
+load_dotenv(dotenv_path='../vt_tool/.env')
+
 app = Flask(__name__)
 app.secret_key = os.urandom(24)
 
 MISPURL       = os.environ.get("MISPURL", "https://localhost")
 MISPKEY       = os.environ.get("MISPKEY", "")
 MISPSSLVERIFY = os.environ.get("MISPSSLVERIFY", "False").lower() not in ("true", "1")
-VT_TOOL_DIR   = os.path.expanduser(os.environ.get("VT_TOOL_DIR", "~/vt_tool"))
+VT_TOOL_DIR   = os.path.expanduser(os.environ.get("VT_TOOL_DIR", "~/p/vt_tool"))
 RESULTS_DIR   = os.path.join(VT_TOOL_DIR, "Results")
 
 
@@ -225,9 +228,7 @@ def list_misp_events():
 
 @app.route("/")
 def index():
-    events  = list_misp_events()
-    misp_ok = get_misp() is not None
-    return render_template("index.html", events=events, misp_ok=misp_ok, misp_url=MISPURL)
+    return render_template("index.html")
 
 
 @app.route("/analyze", methods=["POST"])
@@ -245,21 +246,12 @@ def analyze():
     report_path = os.path.join(VT_TOOL_DIR, filename)
     uploaded.save(report_path)
 
-    # Optional VT key & proxy from the form (override env for this run)
-    vt_key_form  = request.form.get("vt_key",  "").strip()
-    proxy_form   = request.form.get("proxy_url", "").strip()
-
     # Lancer vt_tools.py en mode non-interactif
     venv_python = os.path.join(VT_TOOL_DIR, ".venv", "bin", "python")
     if not os.path.exists(venv_python):
         venv_python = "python3"
     vt_script = os.path.join(VT_TOOL_DIR, "vt_tools.py")
     env = os.environ.copy()
-    if vt_key_form:
-        env["VT_API_KEY"] = vt_key_form
-    if proxy_form:
-        env["HTTPS_PROXY"] = proxy_form
-        env["HTTP_PROXY"]  = proxy_form
 
     try:
         subprocess.run(
